@@ -1,0 +1,23 @@
+# docker-compose.yml
+# Spins up a PostgreSQL database for local development.
+# Run: docker-compose up -d
+# Stop: docker-compose down
+
+version: "3.8"
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:15-alpine       # Lightweight Postgres image
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: scribeai
+    ports:
+      - "5432:5432"                 # Expose on localhost:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # Persist data between restarts
+
+volumes:
+  postgres_data:

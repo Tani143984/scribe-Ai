@@ -1,0 +1,170 @@
+// prisma/schema.prisma
+// This file defines ALL your database tables.
+// Run: npx prisma migrate dev   to apply changes to the DB
+// Run: npx prisma studio       to view data in a browser UI
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//  USER 
+// One user can belong to many workspaces (tenants)
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?   // hashed with bcrypt (for email/password login)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // NextAuth required relations
+  accounts      Account[]
+  sessions      Session[]
+
+  // App relations
+  memberships   Member[]       // workspaces this user belongs to
+  aiRequests    AIRequest[]    // all AI calls made by this user
+}
+
+//  WORKSPACE (TENANT) 
+// A workspace is like a "company account"  multi-tenant
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique  // e.g. "acme-corp"  used in URLs
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members      Member[]
+  subscription Subscription?
+  aiRequests   AIRequest[]
+  promptConfig PromptConfig?
+}
+
+//  MEMBER 
+// Join table: User <-> Workspace with a ROLE
+// This is what makes it multi-tenant with RBAC
+model Member {
+  id          String    @id @default(cuid())
+  role        Role      @default(MEMBER)
+  createdAt   DateTime  @default(now())
+
+  userId      String
+  workspaceId String
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])  // A user can only be in a workspace once
+}
+
+enum Role {
+  OWNER   // Full control, can delete workspace
+  ADMIN   // Can invite/remove members, change settings
+  MEMBER  // Can use features, cannot manage workspace
+}
+
+//  SUBSCRIPTION 
+// One subscription per workspace  managed by Stripe
+model Subscription {
+  id                   String             @id @default(cuid())
+  workspaceId          String             @unique
+  stripeCustomerId     String             @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  plan                 Plan               @default(FREE)
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  workspace            Workspace          @relation(fields: [workspaceId], references: [id])
+}
+
+enum Plan {
+  FREE    // 50 AI credits/month
+  PRO     // 500 AI credits/month  $19/mo
+  TEAM    // Unlimited  $49/mo
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+}
+
+//  AI REQUEST 
+// Every AI call is logged here for usage tracking + billing
+model AIRequest {
+  id          String   @id @default(cuid())
+  prompt      String
+  response    String
+  tokensUsed  Int      @default(0)
+  feature     String   // e.g. "blog-post", "email", "linkedin"
+  createdAt   DateTime @default(now())
+
+  userId      String
+  workspaceId String
+
+  user        User      @relation(fields: [userId], references: [id])
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+}
+
+//  PROMPT CONFIG 
+// Each workspace can customize the AI's tone/persona
+// This is the key "SaaS differentiator" feature
+model PromptConfig {
+  id          String   @id @default(cuid())
+  workspaceId String   @unique
+  brandVoice  String   @default("professional")  // "casual", "professional", "formal"
+  systemPrompt String? // Custom instructions for the AI
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+}
+
+//  NEXTAUTH REQUIRED TABLES 
+// Don't touch these  NextAuth needs them to work
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}

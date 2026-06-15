@@ -1,0 +1,76 @@
+# .github/workflows/ci.yml
+# This runs automatically on every push to GitHub.
+# If tests fail OR build fails, the pipeline turns RED — protecting your main branch.
+# Recruiters who open your GitHub repo WILL notice the green checkmark.
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    # Spin up a real PostgreSQL database for tests
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: scribeai_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      # 1. Download the code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Set up Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # 3. Install dependencies
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. Set up environment variables for CI
+      - name: Set up environment
+        run: |
+          echo "DATABASE_URL=postgresql://postgres:password@localhost:5432/scribeai_test" >> $GITHUB_ENV
+          echo "NEXTAUTH_SECRET=ci-test-secret" >> $GITHUB_ENV
+          echo "NEXTAUTH_URL=http://localhost:3000" >> $GITHUB_ENV
+
+      # 5. Generate Prisma client
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # 6. Run database migrations
+      - name: Run migrations
+        run: npx prisma migrate deploy
+
+      # 7. Run tests
+      - name: Run tests
+        run: npm test
+
+      # 8. Build the app (catches TypeScript errors)
+      - name: Build
+        run: npm run build
+        env:
+          ANTHROPIC_API_KEY: "dummy-key-for-build"
+          STRIPE_SECRET_KEY: "sk_test_dummy"
+          STRIPE_PUBLISHABLE_KEY: "pk_test_dummy"
+          STRIPE_WEBHOOK_SECRET: "whsec_dummy"
