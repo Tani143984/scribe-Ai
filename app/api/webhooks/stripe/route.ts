@@ -11,7 +11,6 @@ import prisma from "@/lib/prisma";
 import Stripe from "stripe";
 
 // Tell Next.js NOT to parse the body — Stripe needs the raw bytes
-export const config = { api: { bodyParser: false } };
 
 export async function POST(req: NextRequest) {
   const body = await req.text(); // raw body as string
