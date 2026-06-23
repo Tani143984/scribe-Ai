@@ -1,7 +1,3 @@
-// lib/auth.ts
-// This is the brain of your authentication system.
-// It configures HOW users log in and WHAT data is in their session.
-
 import { NextAuthOptions } from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import GoogleProvider from "next-auth/providers/google";
@@ -9,22 +5,15 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import prisma from "./prisma";
 
 export const authOptions: NextAuthOptions = {
-  // Prisma adapter: stores sessions/users in your PostgreSQL database
   adapter: PrismaAdapter(prisma) as any,
-
-  // JWT strategy: session data stored in a cookie (faster, no DB lookup on every request)
   session: {
     strategy: "jwt",
   },
-
   providers: [
-    // --- Google Login ---
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     }),
-
-    // --- Email + Password Login ---
     CredentialsProvider({
       name: "credentials",
       credentials: {
@@ -40,7 +29,6 @@ export const authOptions: NextAuthOptions = {
 
         if (!user || !user.password) return null;
 
-        // Compare hashed password
         const bcrypt = require("bcryptjs");
         const valid = await bcrypt.compare(credentials.password, user.password);
         if (!valid) return null;
@@ -49,19 +37,13 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
-
   callbacks: {
-    // This runs every time a JWT token is created/updated
-    // We add the userId to the token so we can use it in API routes
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
       }
       return token;
     },
-
-    // This runs every time a session is checked (e.g., useSession())
-    // We expose the userId to the frontend
     async session({ session, token }) {
       if (session.user) {
         (session.user as any).id = token.id as string;
@@ -69,9 +51,59 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
+  events: {
+    // This fires after EVERY sign-in (Google OAuth or credentials)
+    // If the user has no workspace yet, create one automatically
+    async signIn({ user }) {
+      if (!user.id) return;
 
+      const existing = await prisma.member.findFirst({
+        where: { userId: user.id },
+      });
+
+      if (!existing) {
+        // New Google OAuth user — create their workspace automatically
+        const name = user.name || user.email?.split("@")[0] || "My Workspace";
+        const baseSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        let slug = baseSlug;
+        const slugExists = await prisma.workspace.findUnique({ where: { slug } });
+        if (slugExists) {
+          slug = `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`;
+        }
+
+        await prisma.$transaction(async (tx) => {
+          const workspace = await tx.workspace.create({
+            data: { name: `${name}'s Workspace`, slug },
+          });
+
+          await tx.member.create({
+            data: {
+              userId: user.id!,
+              workspaceId: workspace.id,
+              role: "OWNER",
+            },
+          });
+
+          await tx.subscription.create({
+            data: {
+              workspaceId: workspace.id,
+              stripeCustomerId: `pending_${workspace.id}`,
+              plan: "FREE",
+            },
+          });
+
+          await tx.promptConfig.create({
+            data: {
+              workspaceId: workspace.id,
+              brandVoice: "professional",
+            },
+          });
+        });
+      }
+    },
+  },
   pages: {
-    signIn: "/login",    // Custom login page (we'll build this)
-    error: "/login",     // Redirect errors to login page
+    signIn: "/login",
+    error: "/login",
   },
 };
